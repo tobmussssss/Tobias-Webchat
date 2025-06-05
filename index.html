@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Web Chat</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+        .messages {
+            border: 1px solid #ccc;
+            padding: 12px;
+            height: 400px;
+            overflow-y: auto;
+            margin-bottom: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .message {
+            padding: 8px 12px;
+            border-radius: 12px;
+            max-width: 70%;
+            word-wrap: break-word;
+        }
+
+        .left {
+            background-color: #f1f1f1;
+            align-self: flex-start;
+        }
+
+        .right {
+            background-color: #cce5ff;
+            align-self: flex-end;
+        }
+
+        .hide {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Web Chat</h1>
+
+    <div class="wrapper">
+        <!-- Přihlášení -->
+        <div class="login">
+            <form class="login-form">
+                <label>
+                    Zadejte jméno
+                    <input type="text" class="login-name" placeholder="Name" required>
+                </label>
+                <div>
+                    <button type="submit">Vstoupit</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Chat okno -->
+        <div class="chat hide">
+            <div class="messages"></div>
+            <form class="message-form" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
+                <input type="text" class="message-input" placeholder="Napište zprávu..." required />
+                <button type="submit" class="send-btn" style="height: 3.5em;">Odeslat</button>
+            </form>
+            <button class="logout">Logout</button>
+        </div>
+    </div>
+
+    <audio id="notif-sound" src="ping.mp3" preload="auto"></audio>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.7.3/firebase-app.js";
+        import { getDatabase, ref, onValue, set, push, remove } from "https://www.gstatic.com/firebasejs/11.7.3/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCNQfiMqO6s99WZsd82qIebB6BzQCndiA0",
+            authDomain: "web-chat-25.firebaseapp.com",
+            projectId: "web-chat-25",
+            storageBucket: "web-chat-25.appspot.com",
+            messagingSenderId: "835690089529",
+            appId: "1:835690089529:web:38792ab9599b1fe8a411e8",
+            databaseURL: "https://web-chat-25-default-rtdb.europe-west1.firebasedatabase.app/",
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        const usersRef = ref(db, '/users');
+        const messagesRef = ref(db, '/messages');
+
+        const login = document.querySelector('.login');
+        const logout = document.querySelector('.logout');
+        const loginForm = document.querySelector('.login-form');
+        const nameInput = document.querySelector('.login-name');
+        const chat = document.querySelector('.chat');
+        const messageForm = document.querySelector('.message-form');
+        const messageInput = document.querySelector('.message-input');
+        const messagesContainer = document.querySelector('.messages');
+        const notifSound = document.getElementById('notif-sound');
+
+        let userId = localStorage.getItem('user_id');
+        let currentUserName = '';
+        let users = {};
+        let lastMessageKeys = new Set();
+
+        function init(userId) {
+            if (userId) {
+                login.classList.add('hide');
+                chat.classList.remove('hide');
+            } else {
+                login.classList.remove('hide');
+                chat.classList.add('hide');
+            }
+        }
+
+        init(userId);
+
+        logout.addEventListener('click', () => {
+            if (userId) {
+                const userRef = ref(db, `/users/${userId}`);
+                remove(userRef);
+                localStorage.removeItem('user_id');
+                userId = null;
+                currentUserName = '';
+                init(null);
+            }
+        });
+
+        loginForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const name = nameInput.value.trim();
+            if (!name) return;
+
+            const user = await push(usersRef, {
+                name: name,
+                createdAt: Date.now(),
+            });
+
+            userId = user.key;
+            currentUserName = name;
+            localStorage.setItem('user_id', userId);
+            init(userId);
+        });
+
+        messageForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const messageText = messageInput.value.trim();
+            if (!messageText || !userId) return;
+
+            await push(messagesRef, {
+                message: messageText,
+                created_at: Date.now(),
+                user_id: userId,
+            });
+
+            if (messageText == '/clear') {
+                remove(messagesRef)
+            }
+
+            if (messageText == '/spam') {
+                for (let i = 0; i < 10; i++) {
+                    await push(messagesRef, {
+                        message: `Spam message ${i + 1}`,
+                        created_at: Date.now(),
+                        user_id: userId,
+                    });
+                }
+            }
+
+            messageInput.value = '';
+        });
+
+        onValue(usersRef, (snapshot) => {
+            users = snapshot.val() || {};
+        });
+
+        onValue(messagesRef, (snapshot) => {
+            const data = snapshot.val();
+            if (!data) return;
+
+            const entries = Object.entries(data).sort((a, b) => a[1].created_at - b[1].created_at);
+            let html = '';
+            const currentKeys = new Set();
+
+            entries.forEach(([key, msg]) => {
+            const userName = users[msg.user_id]?.name || 'Neznámý';
+            const side = msg.user_id === userId ? 'right' : 'left';
+
+            html += `<div class="message ${side}">${userName}: ${msg.message}</div>`;
+            currentKeys.add(key);
+
+            if (!lastMessageKeys.has(key) && msg.user_id !== userId) {
+                notifSound.play().catch(() => {});
+            }
+            });
+
+            messagesContainer.innerHTML = html;
+            lastMessageKeys = currentKeys;
+
+            // Scroll to bottom
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+        });
+
+    </script>
+</body>
+
+</html>
